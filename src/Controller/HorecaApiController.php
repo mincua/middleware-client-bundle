@@ -10,6 +10,7 @@ use Horeca\MiddlewareClientBundle\DependencyInjection\Service\TenantApiServiceDI
 use Horeca\MiddlewareClientBundle\DependencyInjection\Service\TenantServiceDI;
 use Horeca\MiddlewareClientBundle\Entity\OrderNotification;
 use Horeca\MiddlewareClientBundle\Enum\MappingNotificationSource;
+use Horeca\MiddlewareClientBundle\Enum\MappingNotificationStatus;
 use Horeca\MiddlewareClientBundle\Enum\OrderNotificationType;
 use Horeca\MiddlewareClientBundle\Enum\SerializationGroups;
 use Horeca\MiddlewareClientBundle\Event\TenantOrderEvent;
@@ -159,10 +160,15 @@ class HorecaApiController extends AbstractController
 
                 $dispatchMessage = true;
             } elseif (!$order->getProviderObjectId()) {
-                // the provider never accepted it: process it as a new order again, a plain update cannot recover it
-                $order->setType(OrderNotificationType::NewOrder);
+                // not accepted by the provider: a failed or stale one needs a new-order retry, an in-flight one is left alone
+                if (
+                    MappingNotificationStatus::Failed === $order->getStatus()
+                    || $order->getCreatedAt() <= new \DateTime('-5 minutes')
+                ) {
+                    $order->setType(OrderNotificationType::NewOrder);
 
-                $dispatchMessage = true;
+                    $dispatchMessage = true;
+                }
             } else {
                 $order->setType(OrderNotificationType::OrderUpdate);
                 $order->setEventType(ShoppingCartUpdateEvents::GENERIC_UPDATE);
