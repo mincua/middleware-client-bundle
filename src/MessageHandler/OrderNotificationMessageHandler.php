@@ -12,6 +12,7 @@ use Horeca\MiddlewareClientBundle\Entity\OrderNotification;
 use Horeca\MiddlewareClientBundle\Enum\MappingNotificationEventName;
 use Horeca\MiddlewareClientBundle\Enum\MappingNotificationSource;
 use Horeca\MiddlewareClientBundle\Enum\MappingNotificationStatus;
+use Horeca\MiddlewareClientBundle\Enum\OrderNotificationType;
 use Horeca\MiddlewareClientBundle\Event\ProviderOrderEvent;
 use Horeca\MiddlewareClientBundle\Event\TenantOrderEvent;
 use Horeca\MiddlewareClientBundle\Exception\OrderMappingException;
@@ -172,6 +173,10 @@ class OrderNotificationMessageHandler implements MessageSubscriberInterface
 
     public function handleMapTenantOrderAndSendToProviderMessage(MappingNotificationMessage $message): void
     {
+        if ($this->isNewOrderAlreadyAccepted($this->getMessageOrderNotification($message))) {
+            return;
+        }
+
         $notification = $this->handleMapTenantOrderToProviderMessageBase($message);
 
         $this->eventDispatcher->dispatch(new TenantOrderEvent($notification), TenantOrderEvent::ORDER_MAPPED);
@@ -245,6 +250,10 @@ class OrderNotificationMessageHandler implements MessageSubscriberInterface
     {
         $this->mappingLogger->logMemoryUsage();
         $notification = $this->getMessageOrderNotification($message);
+
+        if ($this->isNewOrderAlreadyAccepted($notification)) {
+            return;
+        }
 
         try {
             if (!$notification->hasStatus(MappingNotificationStatus::Mapped) || empty($notification->getProviderPayload())) {
@@ -422,6 +431,17 @@ class OrderNotificationMessageHandler implements MessageSubscriberInterface
         }
 
         $this->orderNotificationRepository->save($notification);
+    }
+
+    /**
+     * Duplicate new-order messages must not send twice. Updates legitimately carry a provider id, so only new orders count.
+     */
+    protected function isNewOrderAlreadyAccepted(OrderNotification $notification): bool
+    {
+        // reload: a concurrent handler may have stored the provider id after this entity was loaded
+        $this->entityManager->refresh($notification);
+
+        return $notification->isType(OrderNotificationType::NewOrder) && !empty($notification->getProviderObjectId());
     }
 
     protected function getMessageOrderNotification(MappingNotificationMessage $message): OrderNotification
