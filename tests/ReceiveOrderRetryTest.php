@@ -143,11 +143,12 @@ class ReceiveOrderRetryTest extends TestCase
         $this->handler->setEventDispatcher($dispatcher);
     }
 
-    public function test_rereceive_unaccepted_order_is_processed(): void
+    public function test_rereceive_stale_unaccepted_order_is_processed(): void
     {
         // e.g. created earlier by a status update, or its processing message was lost
         $existing = $this->storedRecord(OrderNotificationType::OrderUpdate);
         $existing->setEventType(ShoppingCartUpdateEvents::GENERIC_UPDATE);
+        $existing->setCreatedAt(new \DateTime('-6 minutes'));
 
         $response = $this->receiveOrder();
 
@@ -156,6 +157,41 @@ class ReceiveOrderRetryTest extends TestCase
         $this->assertSame(OrderNotificationType::NewOrder, $existing->getType());
         $this->assertCount(1, $this->messagesOf(MapTenantOrderAndSendToProviderMessage::class));
         $this->assertSame($existing->getId(), $this->dispatched[0]->getNotificationId());
+
+        $this->drainQueue();
+
+        $this->assertSame([OrderNotificationType::NewOrder], $this->sends);
+        $this->assertSame('provider-1', $existing->getProviderObjectId());
+    }
+
+    public function test_rereceive_in_flight_order_is_not_redispatched_and_keeps_type(): void
+    {
+        $existing = $this->storedRecord(OrderNotificationType::NewOrder);
+        $existing->changeStatus(MappingNotificationStatus::MappingStarted);
+        $existing->setCreatedAt(new \DateTime('-1 minute'));
+
+        $response = $this->receiveOrder();
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertCount(1, $this->store);
+        $this->assertSame(OrderNotificationType::NewOrder, $existing->getType());
+        $this->assertNull($existing->getEventType());
+        $this->assertNotSame('', (string) $existing->getTenantPayloadString());
+        $this->assertSame([], $this->dispatched);
+        $this->assertContains(TenantOrderEvent::ORDER_RECEIVED, $this->events);
+    }
+
+    public function test_rereceive_failed_order_is_processed_immediately(): void
+    {
+        $existing = $this->storedRecord(OrderNotificationType::OrderUpdate);
+        $existing->changeStatus(MappingNotificationStatus::Failed);
+        $existing->setCreatedAt(new \DateTime('-1 minute'));
+
+        $response = $this->receiveOrder();
+
+        $this->assertSame(200, $response->getStatusCode());
+        $this->assertSame(OrderNotificationType::NewOrder, $existing->getType());
+        $this->assertCount(1, $this->messagesOf(MapTenantOrderAndSendToProviderMessage::class));
 
         $this->drainQueue();
 
@@ -183,6 +219,7 @@ class ReceiveOrderRetryTest extends TestCase
     public function test_duplicate_processing_message_sends_once(): void
     {
         $existing = $this->storedRecord(OrderNotificationType::NewOrder);
+        $existing->setCreatedAt(new \DateTime('-6 minutes'));
 
         // two quick re-receives before any worker ran
         $this->receiveOrder();
