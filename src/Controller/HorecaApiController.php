@@ -158,6 +158,11 @@ class HorecaApiController extends AbstractController
                 $order->setSource(MappingNotificationSource::Tenant);
 
                 $dispatchMessage = true;
+            } elseif (!$order->getProviderObjectId()) {
+                // the provider never accepted it: process it as a new order again, a plain update cannot recover it
+                $order->setType(OrderNotificationType::NewOrder);
+
+                $dispatchMessage = true;
             } else {
                 $order->setType(OrderNotificationType::OrderUpdate);
                 $order->setEventType(ShoppingCartUpdateEvents::GENERIC_UPDATE);
